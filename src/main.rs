@@ -2,10 +2,17 @@ mod hook;
 mod install;
 
 use anyhow::Result;
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{Parser, Subcommand};
 
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .placeholder(AnsiColor::Cyan.on_default());
+
 #[derive(Parser)]
-#[command(name = "clostty", about = "Claude Code terminal title hook")]
+#[command(name = "clostty", about = "Claude Code terminal title hook", styles = STYLES)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
