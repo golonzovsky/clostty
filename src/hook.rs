@@ -17,6 +17,13 @@ struct HookInput {
 pub fn run() -> Result<()> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf)?;
+
+    if let Ok(path) = std::env::var("CLOSTTY_LOG")
+        && let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path)
+    {
+        let _ = writeln!(f, "{buf}");
+    }
+
     let input: HookInput = serde_json::from_str(&buf)?;
 
     let Some(event) = input.hook_event_name.as_deref() else {
@@ -37,23 +44,26 @@ fn pick_icon(event: &str, tool: Option<&str>, notification_type: Option<&str>) -
     match event {
         "SessionStart" => Some("◆"),
         "UserPromptSubmit" => Some("🔵"),
-        "PostToolUse" => Some("🔵"),
         "PermissionRequest" => Some("🔴"),
         "PermissionDenied" => Some("🟢"),
         "Stop" | "SubagentStop" => Some("🟢"),
-        "PreToolUse" => Some(match tool.unwrap_or("") {
-            "Bash" | "BashOutput" | "KillShell" => "⚡",
-            "Read" | "Glob" | "Grep" | "NotebookRead" | "LS" => "◉",
-            "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => "✎",
-            "Task" => "⊜",
-            "WebFetch" | "WebSearch" => "◈",
-            _ => "⚙",
-        }),
+        "PreToolUse" | "PostToolUse" => Some(tool_icon(tool.unwrap_or(""))),
         "Notification" => match notification_type? {
             "idle_prompt" => Some("🟢"),
             _ => None,
         },
         _ => None,
+    }
+}
+
+fn tool_icon(name: &str) -> &'static str {
+    match name {
+        "Bash" | "BashOutput" | "KillShell" => "⚡",
+        "Read" | "Glob" | "Grep" | "NotebookRead" | "LS" => "◉",
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => "✎",
+        "Task" => "⊜",
+        "WebFetch" | "WebSearch" => "◈",
+        _ => "⚙",
     }
 }
 
@@ -173,10 +183,22 @@ mod tests {
     #[test]
     fn icon_for_state_events() {
         assert_eq!(pick_icon("UserPromptSubmit", None, None), Some("🔵"));
-        assert_eq!(pick_icon("PostToolUse", None, None), Some("🔵"));
         assert_eq!(pick_icon("PermissionRequest", None, None), Some("🔴"));
         assert_eq!(pick_icon("Stop", None, None), Some("🟢"));
         assert_eq!(pick_icon("SessionStart", None, None), Some("◆"));
+    }
+
+    #[test]
+    fn post_tool_use_matches_pre_tool_use() {
+        // PostToolUse uses the same tool icon so it doesn't flash/overwrite PreToolUse
+        assert_eq!(
+            pick_icon("PostToolUse", Some("WebSearch"), None),
+            pick_icon("PreToolUse", Some("WebSearch"), None),
+        );
+        assert_eq!(
+            pick_icon("PostToolUse", Some("Bash"), None),
+            Some("⚡"),
+        );
     }
 
     #[test]
