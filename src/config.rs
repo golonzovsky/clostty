@@ -4,14 +4,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub icons: Icons,
-    pub tools: Tools,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Icons {
     pub session_start: String,
@@ -20,9 +19,10 @@ pub struct Icons {
     pub permission_denied: String,
     pub stop: String,
     pub idle_prompt: String,
+    pub tools: Tools,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Tools {
     pub bash: String,
@@ -42,6 +42,7 @@ impl Default for Icons {
             permission_denied: "🟢".into(),
             stop: "🟢".into(),
             idle_prompt: "🟢".into(),
+            tools: Tools::default(),
         }
     }
 }
@@ -72,12 +73,12 @@ impl Config {
 
     pub fn tool_icon(&self, name: &str) -> &str {
         match name {
-            "Bash" | "BashOutput" | "KillShell" => &self.tools.bash,
-            "Read" | "Glob" | "Grep" | "NotebookRead" | "LS" => &self.tools.read,
-            "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => &self.tools.edit,
-            "Task" => &self.tools.task,
-            "WebFetch" | "WebSearch" => &self.tools.web,
-            _ => &self.tools.default,
+            "Bash" | "BashOutput" | "KillShell" => &self.icons.tools.bash,
+            "Read" | "Glob" | "Grep" | "NotebookRead" | "LS" => &self.icons.tools.read,
+            "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => &self.icons.tools.edit,
+            "Task" => &self.icons.tools.task,
+            "WebFetch" | "WebSearch" => &self.icons.tools.web,
+            _ => &self.icons.tools.default,
         }
     }
 }
@@ -114,6 +115,17 @@ pub fn edit() -> Result<()> {
     if !status.success() {
         anyhow::bail!("editor {editor} exited with {status}");
     }
+
+    // If the edited config parses identically to the default, remove the
+    // file so the on-disk state reflects "no overrides".
+    if let Ok(text) = fs::read_to_string(&path)
+        && let Ok(parsed) = serde_yaml::from_str::<Config>(&text)
+        && parsed == Config::default()
+    {
+        let _ = fs::remove_file(&path);
+        println!("Config matches defaults — removed {}", path.display());
+    }
+
     Ok(())
 }
 
@@ -141,18 +153,18 @@ mod tests {
         let yaml = serde_yaml::to_string(&original).unwrap();
         let parsed: Config = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.icons.session_start, original.icons.session_start);
-        assert_eq!(parsed.tools.bash, original.tools.bash);
+        assert_eq!(parsed.icons.tools.bash, original.icons.tools.bash);
     }
 
     #[test]
     fn partial_yaml_fills_in_defaults() {
-        let yaml = "icons:\n  user_prompt_submit: \"X\"\ntools:\n  bash: \"B\"\n";
+        let yaml = "icons:\n  user_prompt_submit: \"X\"\n  tools:\n    bash: \"B\"\n";
         let parsed: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(parsed.icons.user_prompt_submit, "X");
-        assert_eq!(parsed.tools.bash, "B");
+        assert_eq!(parsed.icons.tools.bash, "B");
         // fields not overridden keep their defaults
         assert_eq!(parsed.icons.stop, "🟢");
-        assert_eq!(parsed.tools.read, "◉");
+        assert_eq!(parsed.icons.tools.read, "◉");
     }
 
     #[test]
@@ -173,5 +185,17 @@ mod tests {
         assert!(text.contains("icons:"));
         assert!(text.contains("session_start:"));
         assert!(text.contains("tools:"));
+    }
+
+    #[test]
+    fn tools_nested_under_icons_in_yaml() {
+        let yaml = serde_yaml::to_string(&Config::default()).unwrap();
+        // tools appears after icons block, indented under it
+        let tools_pos = yaml.find("tools:").unwrap();
+        let icons_pos = yaml.find("icons:").unwrap();
+        assert!(icons_pos < tools_pos);
+        // The tools: line should be indented (nested under icons)
+        let tools_line_start = yaml[..tools_pos].rfind('\n').unwrap() + 1;
+        assert!(yaml[tools_line_start..tools_pos].starts_with(' '));
     }
 }

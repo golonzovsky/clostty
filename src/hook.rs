@@ -218,7 +218,7 @@ mod tests {
     fn custom_config_overrides_icons() {
         let mut cfg = Config::default();
         cfg.icons.user_prompt_submit = "THINK".into();
-        cfg.tools.bash = "SHELL".into();
+        cfg.icons.tools.bash = "SHELL".into();
         assert_eq!(pick_icon(&cfg, "UserPromptSubmit", None, None), Some("THINK"));
         assert_eq!(pick_icon(&cfg, "PreToolUse", Some("Bash"), None), Some("SHELL"));
     }
