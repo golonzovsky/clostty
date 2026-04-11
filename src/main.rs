@@ -1,3 +1,4 @@
+mod config;
 mod hook;
 mod install;
 
@@ -26,6 +27,8 @@ enum Command {
     Install,
     /// Remove clostty entries from ~/.claude/settings.json
     Uninstall,
+    /// Open the clostty config in $EDITOR (creating it with defaults if missing)
+    Config,
 }
 
 fn main() -> Result<()> {
@@ -34,5 +37,6 @@ fn main() -> Result<()> {
         Command::Hook => hook::run(),
         Command::Install => install::install(),
         Command::Uninstall => install::uninstall(),
+        Command::Config => config::edit(),
     }
 }

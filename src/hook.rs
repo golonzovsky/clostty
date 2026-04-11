@@ -1,3 +1,4 @@
+use crate::config::Config;
 use anyhow::Result;
 use serde::Deserialize;
 use std::fs::{File, OpenOptions};
@@ -30,8 +31,13 @@ pub fn run() -> Result<()> {
         return Ok(());
     };
 
-    let Some(icon) = pick_icon(event, input.tool_name.as_deref(), input.notification_type.as_deref())
-    else {
+    let cfg = Config::load();
+    let Some(icon) = pick_icon(
+        &cfg,
+        event,
+        input.tool_name.as_deref(),
+        input.notification_type.as_deref(),
+    ) else {
         return Ok(());
     };
 
@@ -40,30 +46,24 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn pick_icon(event: &str, tool: Option<&str>, notification_type: Option<&str>) -> Option<&'static str> {
+fn pick_icon<'a>(
+    cfg: &'a Config,
+    event: &str,
+    tool: Option<&str>,
+    notification_type: Option<&str>,
+) -> Option<&'a str> {
     match event {
-        "SessionStart" => Some("◆"),
-        "UserPromptSubmit" => Some("🔵"),
-        "PermissionRequest" => Some("🔴"),
-        "PermissionDenied" => Some("🟢"),
-        "Stop" | "SubagentStop" => Some("🟢"),
-        "PreToolUse" | "PostToolUse" => Some(tool_icon(tool.unwrap_or(""))),
+        "SessionStart" => Some(&cfg.icons.session_start),
+        "UserPromptSubmit" => Some(&cfg.icons.user_prompt_submit),
+        "PermissionRequest" => Some(&cfg.icons.permission_request),
+        "PermissionDenied" => Some(&cfg.icons.permission_denied),
+        "Stop" | "SubagentStop" => Some(&cfg.icons.stop),
+        "PreToolUse" | "PostToolUse" => Some(cfg.tool_icon(tool.unwrap_or(""))),
         "Notification" => match notification_type? {
-            "idle_prompt" => Some("🟢"),
+            "idle_prompt" => Some(&cfg.icons.idle_prompt),
             _ => None,
         },
         _ => None,
-    }
-}
-
-fn tool_icon(name: &str) -> &'static str {
-    match name {
-        "Bash" | "BashOutput" | "KillShell" => "⚡",
-        "Read" | "Glob" | "Grep" | "NotebookRead" | "LS" => "◉",
-        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => "✎",
-        "Task" => "⊜",
-        "WebFetch" | "WebSearch" => "◈",
-        _ => "⚙",
     }
 }
 
@@ -172,45 +172,55 @@ mod tests {
 
     #[test]
     fn icon_for_pretooluse_bash() {
-        assert_eq!(pick_icon("PreToolUse", Some("Bash"), None), Some("⚡"));
-        assert_eq!(pick_icon("PreToolUse", Some("Read"), None), Some("◉"));
-        assert_eq!(pick_icon("PreToolUse", Some("Edit"), None), Some("✎"));
-        assert_eq!(pick_icon("PreToolUse", Some("Task"), None), Some("⊜"));
-        assert_eq!(pick_icon("PreToolUse", Some("WebFetch"), None), Some("◈"));
-        assert_eq!(pick_icon("PreToolUse", Some("Unknown"), None), Some("⚙"));
+        let cfg = Config::default();
+        assert_eq!(pick_icon(&cfg, "PreToolUse", Some("Bash"), None), Some("⚡"));
+        assert_eq!(pick_icon(&cfg, "PreToolUse", Some("Read"), None), Some("◉"));
+        assert_eq!(pick_icon(&cfg, "PreToolUse", Some("Edit"), None), Some("✎"));
+        assert_eq!(pick_icon(&cfg, "PreToolUse", Some("Task"), None), Some("⊜"));
+        assert_eq!(pick_icon(&cfg, "PreToolUse", Some("WebFetch"), None), Some("◈"));
+        assert_eq!(pick_icon(&cfg, "PreToolUse", Some("Unknown"), None), Some("⚙"));
     }
 
     #[test]
     fn icon_for_state_events() {
-        assert_eq!(pick_icon("UserPromptSubmit", None, None), Some("🔵"));
-        assert_eq!(pick_icon("PermissionRequest", None, None), Some("🔴"));
-        assert_eq!(pick_icon("Stop", None, None), Some("🟢"));
-        assert_eq!(pick_icon("SessionStart", None, None), Some("◆"));
+        let cfg = Config::default();
+        assert_eq!(pick_icon(&cfg, "UserPromptSubmit", None, None), Some("🔵"));
+        assert_eq!(pick_icon(&cfg, "PermissionRequest", None, None), Some("🔴"));
+        assert_eq!(pick_icon(&cfg, "Stop", None, None), Some("🟢"));
+        assert_eq!(pick_icon(&cfg, "SessionStart", None, None), Some("◆"));
     }
 
     #[test]
     fn post_tool_use_matches_pre_tool_use() {
-        // PostToolUse uses the same tool icon so it doesn't flash/overwrite PreToolUse
+        let cfg = Config::default();
         assert_eq!(
-            pick_icon("PostToolUse", Some("WebSearch"), None),
-            pick_icon("PreToolUse", Some("WebSearch"), None),
+            pick_icon(&cfg, "PostToolUse", Some("WebSearch"), None),
+            pick_icon(&cfg, "PreToolUse", Some("WebSearch"), None),
         );
-        assert_eq!(
-            pick_icon("PostToolUse", Some("Bash"), None),
-            Some("⚡"),
-        );
+        assert_eq!(pick_icon(&cfg, "PostToolUse", Some("Bash"), None), Some("⚡"));
     }
 
     #[test]
     fn icon_for_notification_idle_only() {
-        assert_eq!(pick_icon("Notification", None, Some("idle_prompt")), Some("🟢"));
-        assert_eq!(pick_icon("Notification", None, Some("auth_success")), None);
-        assert_eq!(pick_icon("Notification", None, None), None);
+        let cfg = Config::default();
+        assert_eq!(pick_icon(&cfg, "Notification", None, Some("idle_prompt")), Some("🟢"));
+        assert_eq!(pick_icon(&cfg, "Notification", None, Some("auth_success")), None);
+        assert_eq!(pick_icon(&cfg, "Notification", None, None), None);
     }
 
     #[test]
     fn icon_for_unknown_event() {
-        assert_eq!(pick_icon("Mystery", None, None), None);
+        let cfg = Config::default();
+        assert_eq!(pick_icon(&cfg, "Mystery", None, None), None);
+    }
+
+    #[test]
+    fn custom_config_overrides_icons() {
+        let mut cfg = Config::default();
+        cfg.icons.user_prompt_submit = "THINK".into();
+        cfg.tools.bash = "SHELL".into();
+        assert_eq!(pick_icon(&cfg, "UserPromptSubmit", None, None), Some("THINK"));
+        assert_eq!(pick_icon(&cfg, "PreToolUse", Some("Bash"), None), Some("SHELL"));
     }
 
     #[test]
