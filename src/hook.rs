@@ -85,8 +85,8 @@ fn subagent_progress(
             let _ = std::fs::remove_dir_all(&dir);
             return None;
         }
-        ("PreToolUse", Some("Task")) if is_main => mark(&dir.join("launched")),
-        ("PostToolUse", Some("Task")) if is_main => mark(&dir.join("done")),
+        ("PreToolUse", Some("Task" | "Agent")) if is_main => mark(&dir.join("launched")),
+        ("PostToolUse", Some("Task" | "Agent")) if is_main => mark(&dir.join("done")),
         _ => {}
     }
 
@@ -445,5 +445,17 @@ mod tests {
     #[test]
     fn subagent_progress_needs_session() {
         assert_eq!(subagent_progress("PreToolUse", Some("Task"), None, None), None);
+    }
+
+    #[test]
+    fn subagent_progress_counts_agent_tool_alias() {
+        // Claude reports the subagent-spawn tool as "Agent" (not "Task") in this build
+        let s = Some("test-agent-alias-9z8y7x");
+        subagent_progress("UserPromptSubmit", None, s, None);
+        assert_eq!(subagent_progress("PreToolUse", Some("Agent"), s, None), Some("0/1".into()));
+        assert_eq!(subagent_progress("PreToolUse", Some("Agent"), s, None), Some("0/2".into()));
+        assert_eq!(subagent_progress("PostToolUse", Some("Agent"), s, None), Some("1/2".into()));
+        assert_eq!(subagent_progress("PostToolUse", Some("Agent"), s, None), None);
+        subagent_progress("Stop", None, s, None);
     }
 }

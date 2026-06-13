@@ -76,7 +76,7 @@ impl Config {
             "Bash" | "BashOutput" | "KillShell" => &self.icons.tools.bash,
             "Read" | "Glob" | "Grep" | "NotebookRead" | "LS" => &self.icons.tools.read,
             "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => &self.icons.tools.edit,
-            "Task" => &self.icons.tools.task,
+            "Task" | "Agent" => &self.icons.tools.task,
             "WebFetch" | "WebSearch" => &self.icons.tools.web,
             _ => &self.icons.tools.default,
         }
