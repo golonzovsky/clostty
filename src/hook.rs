@@ -19,15 +19,18 @@ pub fn run() -> Result<()> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf)?;
 
-    if let Ok(path) = std::env::var("CLOSTTY_LOG")
-        && let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path)
-    {
-        let _ = writeln!(f, "{buf}");
-    }
+    dbg(&format!("stdin: {}", buf.trim()));
 
-    let input: HookInput = serde_json::from_str(&buf)?;
+    let input: HookInput = match serde_json::from_str(&buf) {
+        Ok(i) => i,
+        Err(e) => {
+            dbg(&format!("parse error: {e}"));
+            return Ok(());
+        }
+    };
 
     let Some(event) = input.hook_event_name.as_deref() else {
+        dbg("no hook_event_name -> noop");
         return Ok(());
     };
 
@@ -38,11 +41,14 @@ pub fn run() -> Result<()> {
         input.tool_name.as_deref(),
         input.notification_type.as_deref(),
     ) else {
+        dbg(&format!("event={event} tool={:?} -> no icon, noop", input.tool_name));
         return Ok(());
     };
 
     let name = resolve_name(input.transcript_path.as_deref(), input.cwd.as_deref());
-    set_title(&format!("{icon} {name}"))?;
+    let title = format!("{icon} {name}");
+    dbg(&format!("event={event} tool={:?} -> title={title:?}", input.tool_name));
+    set_title(&title)?;
     Ok(())
 }
 
@@ -123,11 +129,74 @@ fn git_branch(cwd: Option<&str>) -> Option<String> {
 }
 
 fn set_title(title: &str) -> Result<()> {
-    let Ok(mut tty) = OpenOptions::new().write(true).open("/dev/tty") else {
+    let Some(dev) = controlling_tty() else {
+        dbg(&format!("set_title({title:?}): no controlling tty -> NOT WRITTEN"));
         return Ok(());
     };
-    let _ = write!(tty, "\x1b]2;{title}\x07");
+    match OpenOptions::new().write(true).open(&dev) {
+        Ok(mut tty) => {
+            let r = write!(tty, "\x1b]2;{title}\x07");
+            dbg(&format!(
+                "set_title({title:?}): wrote to {dev}, result={r:?}, DISABLE_TITLE_env={:?}",
+                std::env::var("CLAUDE_CODE_DISABLE_TERMINAL_TITLE").ok()
+            ));
+        }
+        Err(e) => dbg(&format!("set_title({title:?}): open {dev} FAILED: {e}")),
+    }
     Ok(())
+}
+
+// Claude Code spawns hooks detached from the controlling terminal, so /dev/tty
+// fails (ENXIO). Fall back to the tty device of the nearest ancestor that still
+// has one (the `claude` process itself).
+fn controlling_tty() -> Option<String> {
+    if OpenOptions::new().write(true).open("/dev/tty").is_ok() {
+        dbg("controlling_tty: /dev/tty works directly");
+        return Some("/dev/tty".into());
+    }
+    let mut pid = std::process::id();
+    let mut chain = Vec::new();
+    for _ in 0..8 {
+        let tty = ps_field(pid, "tty=");
+        chain.push(format!("{pid}:{}", tty.as_deref().unwrap_or("-")));
+        if let Some(t) = tty
+            && t != "??"
+            && t != "?"
+            && !t.is_empty()
+        {
+            dbg(&format!("controlling_tty: {} -> /dev/{t}", chain.join(" -> ")));
+            return Some(format!("/dev/{t}"));
+        }
+        match ps_field(pid, "ppid=").and_then(|s| s.parse().ok()) {
+            Some(p) => pid = p,
+            None => break,
+        }
+    }
+    dbg(&format!("controlling_tty: {} -> NONE", chain.join(" -> ")));
+    None
+}
+
+// Opt-in debug logging: set CLOSTTY_LOG=/path to trace event/icon/tty decisions.
+fn dbg(msg: &str) {
+    let Ok(path) = std::env::var("CLOSTTY_LOG") else {
+        return;
+    };
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{ts} pid={}] {msg}", std::process::id());
+    }
+}
+
+fn ps_field(pid: u32, field: &str) -> Option<String> {
+    let out = Command::new("ps")
+        .args(["-o", field, "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
 }
 
 #[cfg(test)]
