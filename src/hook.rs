@@ -3,7 +3,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 #[derive(Deserialize)]
@@ -13,8 +13,6 @@ struct HookInput {
     transcript_path: Option<String>,
     cwd: Option<String>,
     notification_type: Option<String>,
-    session_id: Option<String>,
-    agent_id: Option<String>,
 }
 
 pub fn run() -> Result<()> {
@@ -48,85 +46,13 @@ pub fn run() -> Result<()> {
     };
 
     let name = resolve_name(input.transcript_path.as_deref(), input.cwd.as_deref());
-    let progress = subagent_progress(
-        event,
-        input.tool_name.as_deref(),
-        input.session_id.as_deref(),
-        input.agent_id.as_deref(),
-    );
-    let title = match &progress {
-        Some(p) => format!("{icon} {p} {name}"),
-        None => format!("{icon} {name}"),
-    };
+    let title = format!("{icon} {name}");
     dbg(&format!(
-        "event={event} tool={:?} progress={progress:?} -> title={title:?}",
+        "event={event} tool={:?} -> title={title:?}",
         input.tool_name
     ));
     set_title(&title)?;
     Ok(())
-}
-
-// Track parallel-subagent progress as `done/total` for the current turn, keyed
-// by session. PreToolUse(Task) = launched, PostToolUse(Task) = finished; only
-// the main agent's Tasks count (subagent-launched Tasks carry an agent_id). Each
-// event drops a uniquely-named marker file so concurrent subagents never race on
-// a shared counter; the count is read by listing those files.
-fn subagent_progress(
-    event: &str,
-    tool: Option<&str>,
-    session: Option<&str>,
-    agent_id: Option<&str>,
-) -> Option<String> {
-    let dir = progress_dir(session?);
-    let is_main = agent_id.is_none();
-
-    match (event, tool) {
-        ("UserPromptSubmit", _) | ("Stop", _) | ("SubagentStop", _) => {
-            let _ = std::fs::remove_dir_all(&dir);
-            return None;
-        }
-        ("PreToolUse", Some("Task" | "Agent")) if is_main => mark(&dir.join("launched")),
-        ("PostToolUse", Some("Task" | "Agent")) if is_main => mark(&dir.join("done")),
-        _ => {}
-    }
-
-    let (done, total) = counts(&dir);
-    if total == 0 {
-        return None;
-    }
-    if done >= total {
-        // fan-out complete — clear so the count disappears once everything finished
-        let _ = std::fs::remove_dir_all(&dir);
-        return None;
-    }
-    Some(format!("{done}/{total}"))
-}
-
-fn progress_dir(session: &str) -> PathBuf {
-    let safe: String = session
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-        .collect();
-    std::env::temp_dir().join("clostty-progress").join(safe)
-}
-
-fn mark(dir: &Path) {
-    let _ = std::fs::create_dir_all(dir);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let _ = File::create(dir.join(format!("{}-{nanos}", std::process::id())));
-}
-
-fn counts(dir: &Path) -> (usize, usize) {
-    let total = std::fs::read_dir(dir.join("launched"))
-        .map(|r| r.count())
-        .unwrap_or(0);
-    let done = std::fs::read_dir(dir.join("done"))
-        .map(|r| r.count())
-        .unwrap_or(0);
-    (done, total)
 }
 
 fn pick_icon<'a>(
@@ -404,58 +330,5 @@ mod tests {
         writeln!(f, r#"{{"type":"custom-title","customTitle":"","sessionId":"a"}}"#).unwrap();
         f.flush().unwrap();
         assert_eq!(read_custom_title(f.path()), Some("real".to_string()));
-    }
-
-    #[test]
-    fn subagent_progress_tracks_fanout() {
-        let s = Some("test-fanout-a1b2c3");
-        let pre = |t| subagent_progress("PreToolUse", Some(t), s, None);
-        let post = |t| subagent_progress("PostToolUse", Some(t), s, None);
-
-        subagent_progress("UserPromptSubmit", None, s, None); // reset turn
-        assert_eq!(pre("Task"), Some("0/1".into()));
-        assert_eq!(pre("Task"), Some("0/2".into()));
-        assert_eq!(pre("Task"), Some("0/3".into()));
-        assert_eq!(post("Task"), Some("1/3".into()));
-        assert_eq!(post("Task"), Some("2/3".into()));
-        // a subagent's own tool event keeps the count visible but doesn't inflate it
-        assert_eq!(
-            subagent_progress("PreToolUse", Some("Bash"), s, Some("agent-1")),
-            Some("2/3".into())
-        );
-        // last subagent finishes -> count clears
-        assert_eq!(post("Task"), None);
-        // nothing lingers into later tool calls
-        assert_eq!(pre("Read"), None);
-        subagent_progress("Stop", None, s, None); // cleanup
-    }
-
-    #[test]
-    fn subagent_progress_ignores_nested_subagent_tasks() {
-        let s = Some("test-nested-d4e5f6");
-        subagent_progress("UserPromptSubmit", None, s, None);
-        // a Task spawned BY a subagent (has agent_id) must not be counted
-        assert_eq!(
-            subagent_progress("PreToolUse", Some("Task"), s, Some("agent-9")),
-            None
-        );
-        subagent_progress("Stop", None, s, None);
-    }
-
-    #[test]
-    fn subagent_progress_needs_session() {
-        assert_eq!(subagent_progress("PreToolUse", Some("Task"), None, None), None);
-    }
-
-    #[test]
-    fn subagent_progress_counts_agent_tool_alias() {
-        // Claude reports the subagent-spawn tool as "Agent" (not "Task") in this build
-        let s = Some("test-agent-alias-9z8y7x");
-        subagent_progress("UserPromptSubmit", None, s, None);
-        assert_eq!(subagent_progress("PreToolUse", Some("Agent"), s, None), Some("0/1".into()));
-        assert_eq!(subagent_progress("PreToolUse", Some("Agent"), s, None), Some("0/2".into()));
-        assert_eq!(subagent_progress("PostToolUse", Some("Agent"), s, None), Some("1/2".into()));
-        assert_eq!(subagent_progress("PostToolUse", Some("Agent"), s, None), None);
-        subagent_progress("Stop", None, s, None);
     }
 }
