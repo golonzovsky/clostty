@@ -132,24 +132,33 @@ pub fn sessions() -> Result<()> {
         .collect();
     rows.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
     let current = surface_id();
-    for b in rows {
-        let st = match status(&b) {
-            Status::Live => "live",
-            Status::Resumable => "resumable",
-            Status::Stale => "stale",
-        };
-        let here = if current.as_deref() == Some(b.surface_id.as_str()) { "*" } else { " " };
-        // /rename can happen after SessionStart, so prefer the transcript's current title
-        let name = match &b.transcript_path {
-            Some(t) if Path::new(t).exists() => resolve_name(Some(t), b.cwd.as_deref()),
-            _ => b.name.clone().unwrap_or_default(),
-        };
-        println!(
-            "{here} {st:<10} {name:<24} {:<40} {} {}",
-            b.cwd.as_deref().unwrap_or(""),
-            b.session_id,
-            b.surface_id,
-        );
+    let home = std::env::var("HOME").unwrap_or_default();
+    let lines: Vec<[String; 5]> = rows
+        .iter()
+        .map(|b| {
+            let st = match status(b) {
+                Status::Live => "live",
+                Status::Resumable => "resumable",
+                Status::Stale => "stale",
+            };
+            let here = if current.as_deref() == Some(b.surface_id.as_str()) { "*" } else { " " };
+            // /rename can happen after SessionStart, so prefer the transcript's current title
+            let name = match &b.transcript_path {
+                Some(t) if Path::new(t).exists() => resolve_name(Some(t), b.cwd.as_deref()),
+                _ => b.name.clone().unwrap_or_default(),
+            };
+            let cwd = b.cwd.as_deref().unwrap_or("");
+            let cwd = match cwd.strip_prefix(&home) {
+                Some(rest) if !home.is_empty() => format!("~{rest}"),
+                _ => cwd.to_string(),
+            };
+            [format!("{here} {st}"), name, cwd, b.session_id.clone(), b.surface_id.clone()]
+        })
+        .collect();
+    let width = |i: usize| lines.iter().map(|l| l[i].chars().count()).max().unwrap_or(0);
+    let (w0, w1, w2) = (width(0), width(1), width(2));
+    for l in &lines {
+        println!("{:<w0$}  {:<w1$}  {:<w2$}  {}  {}", l[0], l[1], l[2], l[3], l[4]);
     }
     Ok(())
 }
