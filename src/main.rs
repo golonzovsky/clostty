@@ -1,5 +1,4 @@
 mod config;
-mod daemon;
 mod hook;
 mod install;
 mod registry;
@@ -25,8 +24,6 @@ struct Cli {
 enum Command {
     /// Read hook JSON from stdin and update the terminal title
     Hook,
-    /// Run the global title daemon (one per machine; owns every tab's title)
-    Daemon,
     /// Register clostty as a hook handler in ~/.claude/settings.json
     Install,
     /// Remove clostty entries from ~/.claude/settings.json
@@ -43,7 +40,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Hook => hook::run(),
-        Command::Daemon => daemon::run(),
         Command::Install => install::install(),
         Command::Uninstall => install::uninstall(),
         Command::Config => config::edit(),

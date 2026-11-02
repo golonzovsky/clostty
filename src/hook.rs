@@ -38,14 +38,6 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // If the global daemon is up, hand it the raw event and let it own the title
-    // (single writer). Fall back to writing the title directly when it's down.
-    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(crate::daemon::socket_path()) {
-        let _ = stream.write_all(buf.as_bytes());
-        dbg("forwarded event to daemon");
-        return Ok(());
-    }
-
     let input: HookInput = match serde_json::from_str(&buf) {
         Ok(i) => i,
         Err(e) => {
@@ -187,8 +179,7 @@ fn controlling_tty() -> Option<String> {
 }
 
 // Walk the ppid chain (up to 8 levels) to the first ancestor with a real tty and
-// return its device path. Used for the hook's own tty and, in the daemon, for an
-// arbitrary session pid.
+// return its device path.
 pub(crate) fn tty_for_pid(start: u32) -> Option<String> {
     let mut pid = start;
     let mut chain = Vec::new();
