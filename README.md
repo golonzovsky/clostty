@@ -35,6 +35,25 @@ clostty picks the tab name in this order:
 2. The current git branch
 3. The basename of the working directory
 
+## Resume sessions after a Ghostty restart
+
+Ghostty restores tabs, splits and working directories (`window-save-state = always`),
+and keeps each surface's `GHOSTTY_SURFACE_ID`. clostty records which Claude session
+ran in which surface (`~/.local/state/clostty/surfaces/<id>.json`, written on
+`SessionStart`, dropped on an intentional `SessionEnd`), so a fresh shell in a
+restored tab can pick the session back up:
+
+```fish
+# config.fish, interactive block
+if set -q GHOSTTY_SURFACE_ID; and type -q clostty; and set -l sid (clostty resume)
+    claude --resume $sid
+end
+```
+
+`clostty resume` prints the bound session id when the session is not running
+anymore and its transcript still exists; otherwise it exits 1. `clostty sessions`
+lists all bindings (`live` / `resumable` / `stale`).
+
 ## Install
 
 ```bash
@@ -42,7 +61,7 @@ cargo install --path .
 clostty install
 ```
 
-`clostty install` writes the hook entries into `~/.claude/settings.json`, pointing to wherever the binary lives (`std::env::current_exe()`). It registers handlers for: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PermissionDenied`, `Notification`, `Stop`. Existing clostty entries are removed and re-added; other hooks in `settings.json` are preserved.
+`clostty install` writes the hook entries into `~/.claude/settings.json`, pointing to wherever the binary lives (`std::env::current_exe()`). It registers handlers for: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PermissionDenied`, `Notification`, `Stop`, `SessionEnd`. Existing clostty entries are removed and re-added; other hooks in `settings.json` are preserved.
 
 You'll also want to disable Claude Code's own terminal title management so it doesn't fight with clostty:
 

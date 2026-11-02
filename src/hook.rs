@@ -9,6 +9,8 @@ use std::process::Command;
 #[derive(Deserialize)]
 struct HookInput {
     hook_event_name: Option<String>,
+    session_id: Option<String>,
+    reason: Option<String>,
     tool_name: Option<String>,
     transcript_path: Option<String>,
     cwd: Option<String>,
@@ -20,6 +22,29 @@ pub fn run() -> Result<()> {
     std::io::stdin().read_to_string(&mut buf)?;
 
     dbg(&format!("stdin: {}", buf.trim()));
+
+    if let Ok(input) = serde_json::from_str::<HookInput>(&buf)
+        && let Some(sid) = input.session_id.as_deref()
+    {
+        let r = match input.hook_event_name.as_deref() {
+            Some("SessionStart") => {
+                crate::registry::record_start(sid, input.cwd.as_deref(), input.transcript_path.as_deref())
+            }
+            Some("SessionEnd") => crate::registry::record_end(sid, input.reason.as_deref()),
+            _ => Ok(()),
+        };
+        if let Err(e) = r {
+            dbg(&format!("registry error: {e}"));
+        }
+    }
+
+    // If the global daemon is up, hand it the raw event and let it own the title
+    // (single writer). Fall back to writing the title directly when it's down.
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(crate::daemon::socket_path()) {
+        let _ = stream.write_all(buf.as_bytes());
+        dbg("forwarded event to daemon");
+        return Ok(());
+    }
 
     let input: HookInput = match serde_json::from_str(&buf) {
         Ok(i) => i,
@@ -55,7 +80,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn pick_icon<'a>(
+pub(crate) fn pick_icon<'a>(
     cfg: &'a Config,
     event: &str,
     tool: Option<&str>,
@@ -76,7 +101,7 @@ fn pick_icon<'a>(
     }
 }
 
-fn resolve_name(transcript_path: Option<&str>, cwd: Option<&str>) -> String {
+pub(crate) fn resolve_name(transcript_path: Option<&str>, cwd: Option<&str>) -> String {
     if let Some(path) = transcript_path
         && let Some(title) = read_custom_title(Path::new(path))
     {
@@ -136,17 +161,18 @@ fn set_title(title: &str) -> Result<()> {
         dbg(&format!("set_title({title:?}): no controlling tty -> NOT WRITTEN"));
         return Ok(());
     };
-    match OpenOptions::new().write(true).open(&dev) {
+    write_title(&dev, title);
+    Ok(())
+}
+
+pub(crate) fn write_title(dev: &str, title: &str) {
+    match OpenOptions::new().write(true).open(dev) {
         Ok(mut tty) => {
             let r = write!(tty, "\x1b]2;{title}\x07");
-            dbg(&format!(
-                "set_title({title:?}): wrote to {dev}, result={r:?}, DISABLE_TITLE_env={:?}",
-                std::env::var("CLAUDE_CODE_DISABLE_TERMINAL_TITLE").ok()
-            ));
+            dbg(&format!("write_title({title:?} -> {dev}): {r:?}"));
         }
-        Err(e) => dbg(&format!("set_title({title:?}): open {dev} FAILED: {e}")),
+        Err(e) => dbg(&format!("write_title({title:?} -> {dev}): open FAILED: {e}")),
     }
-    Ok(())
 }
 
 // Claude Code spawns hooks detached from the controlling terminal, so /dev/tty
@@ -157,7 +183,14 @@ fn controlling_tty() -> Option<String> {
         dbg("controlling_tty: /dev/tty works directly");
         return Some("/dev/tty".into());
     }
-    let mut pid = std::process::id();
+    tty_for_pid(std::process::id())
+}
+
+// Walk the ppid chain (up to 8 levels) to the first ancestor with a real tty and
+// return its device path. Used for the hook's own tty and, in the daemon, for an
+// arbitrary session pid.
+pub(crate) fn tty_for_pid(start: u32) -> Option<String> {
+    let mut pid = start;
     let mut chain = Vec::new();
     for _ in 0..8 {
         let tty = ps_field(pid, "tty=");
@@ -167,7 +200,7 @@ fn controlling_tty() -> Option<String> {
             && t != "?"
             && !t.is_empty()
         {
-            dbg(&format!("controlling_tty: {} -> /dev/{t}", chain.join(" -> ")));
+            dbg(&format!("tty_for_pid({start}): {} -> /dev/{t}", chain.join(" -> ")));
             return Some(format!("/dev/{t}"));
         }
         match ps_field(pid, "ppid=").and_then(|s| s.parse().ok()) {
@@ -175,12 +208,12 @@ fn controlling_tty() -> Option<String> {
             None => break,
         }
     }
-    dbg(&format!("controlling_tty: {} -> NONE", chain.join(" -> ")));
+    dbg(&format!("tty_for_pid({start}): {} -> NONE", chain.join(" -> ")));
     None
 }
 
 // Opt-in debug logging: set CLOSTTY_LOG=/path to trace event/icon/tty decisions.
-fn dbg(msg: &str) {
+pub(crate) fn dbg(msg: &str) {
     let Ok(path) = std::env::var("CLOSTTY_LOG") else {
         return;
     };
@@ -193,7 +226,7 @@ fn dbg(msg: &str) {
     }
 }
 
-fn ps_field(pid: u32, field: &str) -> Option<String> {
+pub(crate) fn ps_field(pid: u32, field: &str) -> Option<String> {
     let out = Command::new("ps")
         .args(["-o", field, "-p", &pid.to_string()])
         .output()

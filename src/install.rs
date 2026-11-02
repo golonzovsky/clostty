@@ -12,6 +12,7 @@ const EVENTS: &[&str] = &[
     "PermissionDenied",
     "Notification",
     "Stop",
+    "SessionEnd",
 ];
 
 fn settings_path() -> Result<PathBuf> {

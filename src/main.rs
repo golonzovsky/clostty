@@ -1,6 +1,8 @@
 mod config;
+mod daemon;
 mod hook;
 mod install;
+mod registry;
 
 use anyhow::Result;
 use clap::builder::styling::{AnsiColor, Effects, Styles};
@@ -23,20 +25,29 @@ struct Cli {
 enum Command {
     /// Read hook JSON from stdin and update the terminal title
     Hook,
+    /// Run the global title daemon (one per machine; owns every tab's title)
+    Daemon,
     /// Register clostty as a hook handler in ~/.claude/settings.json
     Install,
     /// Remove clostty entries from ~/.claude/settings.json
     Uninstall,
     /// Open the clostty config in $EDITOR (creating it with defaults if missing)
     Config,
+    /// Print the Claude session id last run in this Ghostty surface (exit 1 if none)
+    Resume,
+    /// List surface -> session bindings
+    Sessions,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Hook => hook::run(),
+        Command::Daemon => daemon::run(),
         Command::Install => install::install(),
         Command::Uninstall => install::uninstall(),
         Command::Config => config::edit(),
+        Command::Resume => registry::resume(),
+        Command::Sessions => registry::sessions(),
     }
 }
